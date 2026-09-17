@@ -220,6 +220,16 @@ impl LurosonieManager {
         let saved_height = self.load_last_processed_btc_height().await.unwrap_or(0);
         let mut last_processed_btc_height = saved_height.max(*self.last_btc_height.read().await);
 
+        // 💡 CORRECTIF : Si on démarre à zéro (première initialisation), on se cale sur le sommet de la chaîne Bitcoin
+        if last_processed_btc_height == 0 {
+            let client = reqwest::Client::new();
+            if let Ok(current_height) = self.get_blockcount_from_bridge(&client).await {
+                println!("✨ Première initialisation : Séquençage calé sur le Head Bitcoin #{}", current_height);
+                last_processed_btc_height = current_height;
+                self.save_last_processed_btc_height(current_height).await;
+            }
+        }
+
         let network = if let Some(bridge) = &self.btc_bridge {
             bridge.get_network()
         } else {
@@ -389,6 +399,11 @@ impl LurosonieManager {
         // 1. Récupère toutes les tx du mempool
         let pending = self.pending_transactions.read().await;
         let transactions: Vec<TxRequest> = pending.values().cloned().collect();
+        let mut processed_hashes: Vec<String> = Vec::new();
+        for tx in &transactions {
+            let tx_hash = format!("{}:{}:{}:{}", tx.from_op, tx.receiver_op, tx.value_tx, tx.nonce_tx);
+            processed_hashes.push(tx_hash);
+        }
         drop(pending);
 
         println!(
@@ -427,7 +442,6 @@ impl LurosonieManager {
 
         let mut contract_states: HashMap<String, Vec<u8>> = HashMap::new();
         let mut execution_results: HashMap<String, serde_json::Value> = HashMap::new();
-        let processed_hashes: Vec<String> = Vec::new();
 
         // 4. Finalisation du bloc avec métadonnées Bitcoin
         let parent_slura_hash = self.last_block_hash.read().await.clone();

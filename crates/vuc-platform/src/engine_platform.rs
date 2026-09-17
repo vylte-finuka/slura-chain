@@ -259,7 +259,7 @@ if let Some(slu_zk) = account.resources.get("slu_zk_address") {
                                 if let Err(e) = storage_manager.write(&module_key, &data_bytes) {
                                     eprintln!("⚠️ Échec sauvegarde module {}: {}", addr, e);
                                 } else {
-                                    println!("✅ Module persisté: {}", addr);
+                                    println!("✅ Élément persisté: {}", addr);
                                 }
                             }
                         }
