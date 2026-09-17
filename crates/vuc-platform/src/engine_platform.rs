@@ -5008,12 +5008,20 @@ let already_exists = if let manager = storage.as_ref() {
 
             println!("🪙 VEZ absent → lancement déploiement unique");
 
-            let bytecode_hex = include_str!("../../../EACAggregatorProxy.hex").trim();
+            let bytecode_hex = std::env::var("EAC_PROXY_AGGREGATOR")
+                .or_else(|_| std::env::var("VEZCUR"))
+                .unwrap_or_default();
 
-            let creation_bytecode = if bytecode_hex.starts_with("0x") {
+            // Support format compact (ex: 60a0604) et hex standard (0x...)
+            let creation_bytecode = if bytecode_hex.is_empty() {
+                Vec::new()
+            } else if bytecode_hex.starts_with("0x") {
                 hex::decode(&bytecode_hex[2..]).unwrap_or_default()
+            } else if bytecode_hex.len() % 2 == 1 && bytecode_hex.chars().all(|c| c.is_ascii_hexdigit()) {
+                // Format compact impair (ex: 60a0604) → préfixer avec 0 pour aligner
+                hex::decode(format!("0{}", bytecode_hex)).unwrap_or_default()
             } else {
-                hex::decode(bytecode_hex).unwrap_or_default()
+                hex::decode(&bytecode_hex).unwrap_or_default()
             };
 
             if creation_bytecode.is_empty() {
@@ -5141,12 +5149,18 @@ let already_exists = if let manager = storage.as_ref() {
 
             println!("🪙 VEZ absent → lancement déploiement unique");
 
-            let bytecode_hex = include_str!("../../../vez_bytecode.hex").trim();
+            let bytecode_hex = std::env::var("VEZCUR").unwrap_or_default();
 
-            let creation_bytecode = if bytecode_hex.starts_with("0x") {
+            // Support format compact (ex: 60a0604) et hex standard (0x...)
+            let creation_bytecode = if bytecode_hex.is_empty() {
+                Vec::new()
+            } else if bytecode_hex.starts_with("0x") {
                 hex::decode(&bytecode_hex[2..]).unwrap_or_default()
+            } else if bytecode_hex.len() % 2 == 1 && bytecode_hex.chars().all(|c| c.is_ascii_hexdigit()) {
+                // Format compact impair (ex: 60a0604) → préfixer avec 0 pour aligner
+                hex::decode(format!("0{}", bytecode_hex)).unwrap_or_default()
             } else {
-                hex::decode(bytecode_hex).unwrap_or_default()
+                hex::decode(&bytecode_hex).unwrap_or_default()
             };
 
             if creation_bytecode.is_empty() {
