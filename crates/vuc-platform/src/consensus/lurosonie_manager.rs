@@ -22,6 +22,7 @@ use vuc_tx::slura_merkle::build_state_trie;
 use vuc_tx::slurachain_vm::SlurachainVm;
 use vuc_types::committee::EpochId;
 use vuc_types::supported_protocol_versions::SupportedProtocolVersions;
+use vuc_bridge::BitcoinBlockAnchor;
 
 lazy_static! {
     static ref CONTRACT_STATE_HISTORY: Mutex<HashMap<String, Vec<Vec<u8>>>> =
@@ -53,6 +54,9 @@ pub struct BlockData {
     pub relay_power: u64,
     pub delegated_stake: u64,
     pub is_system_block: bool,
+    // Bitcoin anchor fields for sidechain sequencing
+    pub bitcoin_anchor: Option<BitcoinBlockAnchor>,
+    pub parent_slura_hash: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -412,6 +416,14 @@ impl LurosonieManager {
         let processed_hashes: Vec<String> = Vec::new();
 
         // 4. Finalisation du bloc avec métadonnées Bitcoin
+        let parent_slura_hash = self.last_block_hash.read().await.clone();
+        let bitcoin_anchor = if let Some(bridge) = &self.btc_bridge {
+            let client = reqwest::Client::new();
+            bridge.get_block_anchor(btc_height, &client).await.ok()
+        } else {
+            None
+        };
+
         let block_data = BlockData {
             block,
             transactions,
@@ -421,6 +433,8 @@ impl LurosonieManager {
             relay_power,
             delegated_stake: 0,
             is_system_block,
+            bitcoin_anchor,
+            parent_slura_hash,
         };
 
         // Ajout à la chaîne
@@ -777,7 +791,15 @@ impl LurosonieManager {
             "delegated_stake": block_data.delegated_stake,
             "validator": block_data.validator,
             "contract_states_count": block_data.contract_states.len(),
-            "transactions_count": block_data.transactions.len()
+            "transactions_count": block_data.transactions.len(),
+            "bitcoin_anchor": block_data.bitcoin_anchor.as_ref().map(|a| serde_json::json!({
+                "height": a.height,
+                "block_hash": a.block_hash,
+                "previous_block_hash": a.previous_block_hash,
+                "txids": a.txids,
+                "merkle_root": a.merkle_root
+            })),
+            "parent_slura_hash": block_data.parent_slura_hash
         }))
         .map_err(|e| format!("Erreur sérialisation bloc Lurosonie: {}", e))?;
 

@@ -4,6 +4,7 @@ use tokio::sync::RwLock;
 use std::sync::Arc;
 use sha3::{Digest, Sha3_256};
 use hex;
+use reqwest::Client;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum NetworkType {
@@ -32,6 +33,15 @@ pub struct BtcDeposit {
     pub block_hash: Option<String>,
     pub block_height: Option<u64>,
     pub merkle_proof: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct BitcoinBlockAnchor {
+    pub height: u64,
+    pub block_hash: String,
+    pub previous_block_hash: Option<String>,
+    pub txids: Vec<String>,
+    pub merkle_root: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -170,6 +180,48 @@ impl BitcoinBridge {
         Ok(txids)
     }
 
+    /// Récupère les données complètes d'un bloc Bitcoin (hash + txids)
+    /// Utilisé par le séquenceur sidechain pour lier le bloc BTC au bloc Slura
+    pub async fn get_block_data(&self, height: u64, client: &reqwest::Client) -> Result<(String, Vec<String>), String> {
+        let block_hash = self.get_block_hash(height, client).await?;
+        let txids = self.get_block_txs(&block_hash, client).await?;
+        Ok((block_hash, txids))
+    }
+    /// Récupère un BitcoinBlockAnchor complet (hash, prev_hash, txids, merkle_root)
+    pub async fn get_block_anchor(&self, height: u64, client: &Client) -> Result<BitcoinBlockAnchor, String> {
+        let block_hash = self.get_block_hash(height, client).await?;
+        let txids = self.get_block_txs(&block_hash, client).await?;
+
+        let previous_block_hash = if height > 0 {
+            Some(self.get_block_hash(height - 1, client).await?)
+        } else {
+            None
+        };
+
+        let merkle_root = self.get_block_merkle_root(&block_hash, client).await;
+
+        Ok(BitcoinBlockAnchor {
+            height,
+            block_hash,
+            previous_block_hash,
+            txids,
+            merkle_root,
+        })
+    }
+
+    async fn get_block_merkle_root(&self, block_hash: &str, client: &Client) -> Option<String> {
+        let url = self.network_url();
+        let payload = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"getblock","params":[block_hash, true]});
+        client.post(&url)
+            .header("Content-Type","application/json")
+            .json(&payload)
+            .send().await.ok()?
+            .json::<serde_json::Value>().await.ok()?
+            .get("result")
+            .and_then(|r| r.get("mrklRoot"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    }
     async fn check_deposit(&self, txid: &str, client: &reqwest::Client) {
         let tx = match self.get_transaction(txid, client).await {
             Ok(t) => t,
@@ -231,17 +283,18 @@ impl BitcoinBridge {
         format!("0x{}", hex::encode(&hash[12..]))
     }
 
-    async fn mint_vez_for_deposit(&self, txid: &str, recipient: &str, amount: u64) {
+    async fn mint_vez_for_deposit(&self, txid: &str, recipient: &str, amount: u64) -> String {
         let vez_contract = self.vez_contract.read().await;
         if vez_contract.is_empty() {
             tracing::error!("VEZ contract address not set — cannot mint");
-            return;
+            return "error: no contract".to_string();
         }
         tracing::info!("🎨 Mint VEZ pour dépôt {} : {} → {} ({} satoshis)", txid, recipient, vez_contract.as_str(), amount);
         let mut deposits = self.deposits.write().await;
         if let Some(deposit) = deposits.get_mut(txid) {
             deposit.status = DepositStatus::Minted;
         }
+        "minted".to_string()
     }
 
     pub async fn get_pending_deposits(&self) -> Vec<BtcDeposit> {
