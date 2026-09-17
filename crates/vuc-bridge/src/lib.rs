@@ -171,7 +171,7 @@ impl BitcoinBridge {
 
     async fn get_block_txs(&self, block_hash: &str, client: &reqwest::Client) -> Result<Vec<String>, String> {
         let url = self.network_url();
-        let payload = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"getblock","params":[block_hash, false]});
+        let payload = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"getblock","params":[block_hash, true]});
         let resp = client.post(&url).header("Content-Type","application/json").json(&payload).send().await
             .map_err(|e| format!("HTTP: {}", e))?
             .json::<serde_json::Value>().await.map_err(|e| format!("JSON: {}", e))?;
