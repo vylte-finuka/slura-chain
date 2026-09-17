@@ -37,9 +37,6 @@ pub const LUROSONIE_DECENTRALIZATION_THRESHOLD: u128 = 42_500_000_000_000_000_00
 pub const LUROSONIE_MIN_RELAY_STAKE: u64 = 30_000;
 pub const LUROSONIE_SYSTEM_VALIDATOR: &str = "0x53ae54b11251d5003e9aa51422405bc35a2ef32d";
 
-// Valeur forcée énorme pour que le système soit toujours valide
-const FORCED_SYSTEM_POWER: u64 = 1_000_000_000;
-
 const RELAY_MASTER_SELECTOR: &str = "relay_master(address,uint256)";
 const REWARD_HOLDER_SELECTOR: &str = "reward_lurosonie_holder(address,uint256)";
 const GET_POWER_SELECTOR: &str = "getValidatorRelayPower(address)";
@@ -304,7 +301,7 @@ impl LurosonieManager {
         let vez_addr = match self.find_vezcur_contract_address().await {
             Ok(addr) => addr,
             Err(_) => {
-                println!("⚠️ Impossible de trouver VEZ → stake forcé");
+                println!("⚠️ Impossible de trouver VEZ → pas de validateur système");
                 String::new()
             }
         };
@@ -326,15 +323,15 @@ impl LurosonieManager {
             .unwrap_or(0)
         };
 
-        // Power forcé énorme
-        let forced_power = FORCED_SYSTEM_POWER.max(stake);
+        // Seul le stake réel compte — pas de pouvoir forcé
+        let real_power = stake;
 
         let system_validator = RelayValidator {
             address: system_address.clone(),
             stake,
             delegated_stake: 0,
-            total_power: forced_power,
-            is_active: true,
+            total_power: real_power,
+            is_active: stake >= self.min_relay_stake,
             relay_count: 0,
             last_relay_time: Utc::now().timestamp() as u64,
             is_system: true,
@@ -347,8 +344,8 @@ impl LurosonieManager {
         *current_leader = Some(system_address.clone());
 
         println!(
-            "🏛️ Validateur système FORCÉ → stake: {}, power: {} VEZ (illimité)",
-            stake, forced_power
+            "🏛️ Validateur système → stake réel: {} VEZ, power: {} (min: {})",
+            stake, real_power, self.min_relay_stake
         );
     }
 
@@ -559,31 +556,52 @@ impl LurosonieManager {
     }
 
     async fn sync_relay_validators_from_vm(&self) -> Result<(), String> {
-        println!("sync_relay_validators_from_vm → mode forcé : seul le système actif");
+        println!("sync_relay_validators_from_vm → chargement des validateurs réels depuis VEZ");
 
+        let vez_addr = match self.find_vezcur_contract_address().await {
+            Ok(addr) => addr,
+            Err(_) => {
+                println!("⚠️ Impossible de trouver VEZ → pas de validateurs");
+                return Ok(());
+            }
+        };
+
+        let mut vm = self.vm.write().await;
+        let mut validators = self.relay_validators.write().await;
+        validators.clear(); // on recharge depuis VEZ
+
+        // Récupérer tous les validateurs depuis VEZ (simplifié : on suppose qu'ils sont stockés dans le contrat)
+        // Pour l'instant, on ne charge que le système (comme dans initialize_system_validator)
         let system_address = LUROSONIE_SYSTEM_VALIDATOR.to_string();
+        let system_stake = match vm.execute_module(
+            &vez_addr,
+            "balanceOf",
+            vec![serde_json::Value::String(system_address.clone())],
+            Some(&system_address),
+            None,
+        ).await.ok().and_then(|r| r.as_u64()) {
+            Some(stake) => stake,
+            None => 0,
+        };
 
         let system_validator = RelayValidator {
             address: system_address.clone(),
-            stake: 0,
+            stake: system_stake,
             delegated_stake: 0,
-            total_power: FORCED_SYSTEM_POWER,
-            is_active: true,
-            relay_count: 999999,
+            total_power: system_stake, // pas de pouvoir forcé
+            is_active: system_stake >= self.min_relay_stake,
+            relay_count: 0,
             last_relay_time: Utc::now().timestamp() as u64,
             is_system: true,
         };
 
-        let mut validators = self.relay_validators.write().await;
-        validators.clear(); // on garde QUE le système
         validators.insert(system_address.clone(), system_validator);
 
         let mut current_leader = self.current_relay_leader.write().await;
-        *current_leader = Some(system_address);
+        *current_leader = Some(system_address.clone());
 
         println!(
-            "🔄 Sync forcée : seul le système reste actif avec power {}",
-            FORCED_SYSTEM_POWER
+            "🔄 Sync des validateurs : système {} (stake: {})", system_address, system_stake
         );
 
         Ok(())
