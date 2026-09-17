@@ -216,7 +216,10 @@ impl LurosonieManager {
         // Attendre que le bridge Bitcoin soit prêt
         tokio::time::sleep(Duration::from_secs(5)).await;
 
-        let mut last_processed_btc_height = *self.last_btc_height.read().await;
+        // Charger la hauteur Bitcoin persistée depuis la base de données
+        let saved_height = self.load_last_processed_btc_height().await.unwrap_or(0);
+        let mut last_processed_btc_height = saved_height.max(*self.last_btc_height.read().await);
+
         let network = if let Some(bridge) = &self.btc_bridge {
             bridge.get_network()
         } else {
@@ -224,14 +227,22 @@ impl LurosonieManager {
         };
 
         println!("🌐 Réseau Bitcoin configuré: {:?}", network);
-        println!("📦 Hauteur Bitcoin initiale: {}", last_processed_btc_height);
+        println!("📦 Hauteur Bitcoin initiale (depuis DB): {}", last_processed_btc_height);
 
         loop {
-            // Vérifier s'il y a de nouveaux blocs Bitcoin
-            let current_btc_height = *self.last_btc_height.read().await;
-            
+            // Récupérer la hauteur Bitcoin directement depuis le nœud (plus robuste que la mémoire)
+            let client = reqwest::Client::new();
+            let current_btc_height = match self.get_blockcount_from_bridge(&client).await {
+                Ok(h) => h,
+                Err(e) => {
+                    tracing::error!("Erreur récupération hauteur Bitcoin: {}", e);
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    continue;
+                }
+            };
+
             if current_btc_height > last_processed_btc_height {
-                // Nouveau bloc Bitcoin détecté → produire un bloc Slura
+                // Nouveau bloc Bitcoin détecté → produire des blocs Slura
                 let new_blocks = current_btc_height - last_processed_btc_height;
                 
                 for i in 1..=new_blocks {
@@ -265,6 +276,9 @@ impl LurosonieManager {
                     }
 
                     println!("✅ Bloc #{} produit et validé par consensus BFT (BTC #{})", block_number, btc_height);
+                    
+                    // Persister la nouvelle hauteur Bitcoin après chaque bloc produit
+                    self.save_last_processed_btc_height(btc_height).await;
                 }
                 
                 last_processed_btc_height = current_btc_height;
@@ -1428,5 +1442,52 @@ impl LurosonieManager {
         }
 
         Ok(())
+    }
+
+    /// Récupère la hauteur Bitcoin actuelle via le bridge
+    async fn get_blockcount_from_bridge(&self, client: &reqwest::Client) -> Result<u64, String> {
+        if let Some(bridge) = &self.btc_bridge {
+            bridge.get_blockcount(client).await
+        } else {
+            Err("Bitcoin bridge non configuré".to_string())
+        }
+    }
+
+    /// Charge la dernière hauteur Bitcoin traitée depuis la base de données
+    async fn load_last_processed_btc_height(&self) -> Result<u64, String> {
+        let key = "lurosonie:last_btc_height";
+        match self.storage.get_metadata(key) {
+            Ok(Some(metadata)) => {
+                // La hauteur est stockée dans value_tx comme JSON
+                let height: u64 = serde_json::from_str(&metadata.value_tx)
+                    .map_err(|e| format!("Erreur désérialisation hauteur BTC: {}", e))?;
+                println!("📥 [DB] Hauteur Bitcoin persistée chargée: {}", height);
+                Ok(height)
+            }
+            Ok(None) => {
+                println!("📥 [DB] Aucune hauteur Bitcoin persistée trouvée");
+                Ok(0)
+            }
+            Err(e) => Err(format!("Erreur lecture DB: {}", e)),
+        }
+    }
+
+    /// Sauvegarde la dernière hauteur Bitcoin traitée dans la base de données
+    async fn save_last_processed_btc_height(&self, height: u64) {
+        let key = "lurosonie:last_btc_height";
+        let metadata = SlurachainMetadata {
+            from_op: "lurosonie_system".to_string(),
+            receiver_op: "btc_height_tracker".to_string(),
+            fees_tx: 0,
+            value_tx: serde_json::to_string(&height).unwrap_or_default(),
+            nonce_tx: height,
+            hash_tx: "btc_height".to_string(),
+        };
+
+        if let Err(e) = self.storage.store_metadata(key, &metadata) {
+            error!("❌ Erreur sauvegarde hauteur BTC {}: {}", height, e);
+        } else {
+            println!("💾 [DB] Hauteur Bitcoin persistée: {}", height);
+        }
     }
 }
