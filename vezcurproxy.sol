@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: UNLICENSED
-// Copyright (C) Vyft, SAS
+// Copyright (C) Vyft, Ltd. 2026. Tous droits réservés.
 
 pragma solidity ^0.8.26;
 
@@ -13,6 +13,7 @@ import "D:/Downloads/Vyft_product/Slura/node_modules/@openzeppelin/contracts/pro
 ///====≈====≈===
 interface IERC20Minimal {
     function totalSupply() external view returns (uint256);
+    function complet_quant() external view returns (uint256);
 }
 
 ///====≈====≈===
@@ -48,7 +49,7 @@ contract VEZproxy is ERC20, Ownable, UUPSUpgradeable {
 
     string public currency = "EUR";
     address public me;
-    uint256 public complet_quant;
+    uint256 private complet_quantData;
 
     address public blacklister;
     mapping(address => bool) private _blacklisted;
@@ -151,7 +152,7 @@ contract VEZproxy is ERC20, Ownable, UUPSUpgradeable {
         me =
             0x53Ae54b11251D5003e9aA51422405bC35A2eF32D;
 
-        complet_quant = 0;
+        complet_quantData = 0;
 
         blacklister = owner();
         _paused = false;
@@ -190,7 +191,7 @@ contract VEZproxy is ERC20, Ownable, UUPSUpgradeable {
     )
         public
     {
-        // Autorisé par tout custodian enregistré (SLURC-2)
+        // Autorisé par tout custodian enregistré (SLURC20)
         require(
             custodians[msg.sender],
             "Only custodian can mint"
@@ -226,7 +227,7 @@ contract VEZproxy is ERC20, Ownable, UUPSUpgradeable {
             amount
         );
 
-        complet_quant += amount;
+        complet_quantData += amount;
 
         emit MintLimited(
             to,
@@ -265,8 +266,8 @@ contract VEZproxy is ERC20, Ownable, UUPSUpgradeable {
             amount
         );
 
-        if (complet_quant >= amount) {
-            complet_quant -= amount;
+        if (complet_quantData >= amount) {
+            complet_quantData -= amount;
         }
 
         emit ObtainRequested(
@@ -414,8 +415,8 @@ contract VEZproxy is ERC20, Ownable, UUPSUpgradeable {
             (amount - burnAmount)
         );
 
-        if (complet_quant >= amount) {
-            complet_quant -= amount;
+        if (complet_quantData >= amount) {
+            complet_quantData -= amount;
         }
 
         emit DisbursedWithBurn(
@@ -484,7 +485,7 @@ contract VEZproxy is ERC20, Ownable, UUPSUpgradeable {
             rewardAmount
         );
 
-        complet_quant +=
+        complet_quantData +=
             rewardAmount;
 
         emit LurosonieRewardDistributed(
@@ -572,7 +573,7 @@ contract VEZproxy is ERC20, Ownable, UUPSUpgradeable {
         );
     }
 
-    ///====≈====≈=== GESTION CUSTODIAN (SLURC-2 – liste extensible)
+    ///====≈====≈=== GESTION CUSTODIAN (SLURC20 – liste extensible)
     function _addCustodian(
         address _custodian
     )
@@ -654,6 +655,10 @@ contract VEZproxy is ERC20, Ownable, UUPSUpgradeable {
         return custodianList.length;
     }
 
+    function complet_quant() public view returns (uint256) {
+        return complet_quantData;
+    }
+
     ///====≈====≈=== INFORMATIONS PoR
     function getReserveStatus()
         external
@@ -671,7 +676,7 @@ contract VEZproxy is ERC20, Ownable, UUPSUpgradeable {
             reserveProof.reserveValueEUR();
 
         supplyVEZ =
-            totalSupply();
+            complet_quant();
 
         availableMint =
             reserveProof.availableMint();
@@ -889,7 +894,7 @@ contract reservVEZ {
         )
     {
         onChainSupply =
-            IERC20Minimal(VEZasset).totalSupply();
+            IERC20Minimal(VEZasset).complet_quant();
 
         return (
             onChainSupply,
@@ -910,7 +915,7 @@ contract reservVEZ {
     {
         return
             reserveValueEUR >=
-            IERC20Minimal(VEZasset).totalSupply();
+            IERC20Minimal(VEZasset).complet_quant();
     }
 
     ///====≈====≈=== AVAILABLE MINT
@@ -919,19 +924,19 @@ contract reservVEZ {
         view
         returns (uint256)
     {
-        uint256 supply =
-            IERC20Minimal(VEZasset).totalSupply();
+        uint256 activeSupply =
+            IERC20Minimal(VEZasset).complet_quant();
 
         if (
             reserveValueEUR <=
-            supply
+            activeSupply
         ) {
             return 0;
         }
 
         return
             reserveValueEUR -
-            supply;
+            activeSupply;
     }
 }
 
@@ -1005,7 +1010,7 @@ contract VEZcustodian is Ownable, ReentrancyGuard {
     }
 
     ///====≈====≈=== Enregistrer VEZcustodian comme custodian
-    /// sur VEZproxy (SLURC-2)
+    /// sur VEZproxy (SLURC20)
     function registerAsCustodian()
         external
         onlyOwner
